@@ -1,7 +1,14 @@
 {{- define "schema_validator" -}}
     {{- range . -}}
-        {{- if or .Maximum .Minimum .MaxLength .MinLength .Pattern .UniqueItems .MinItems .MaxItems .MultipleOf .Items .AdditionalProperties .AllOf }}
+        {{- if or .Maximum .Minimum .MaxLength .MinLength .Pattern .UniqueItems .MinItems .MaxItems .MultipleOf .Items .AdditionalProperties .AllOf .CheckExprs }}
             {{- if not .EscapedNameHasQuote }}
+                {{- if .IsPrimitive }}
+                    {{- $field := .PathLastPart }}
+                    {{- $required := .Required }}
+                    {{- range .CheckExprs }}
+        {{ fieldCEL .Rule $field }}{{ if not $required }} if {{ $field }} not in [None, Undefined]{{ end }}
+                    {{- end }}
+                {{- end }}
                 {{- if or .Maximum .Minimum .MaxLength .MinLength .Pattern .UniqueItems .MinItems .MaxItems .MultipleOf }}
                     {{- template "expression_validator" (dict "Item" . "Prefix" "        " "Postfix" "") }}
                 {{- end -}}

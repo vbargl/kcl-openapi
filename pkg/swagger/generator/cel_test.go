@@ -41,7 +41,7 @@ func TestCelToKCL(t *testing.T) {
 		{"and", `self.a == 1 && self.b == 2`, `((a == 1) and (b == 2))`},
 		{"or", `self.a == 1 || self.b == 2`, `((a == 1) or (b == 2))`},
 		{"not", `!self.a`, `not (a)`},
-		{"not has", `!has(self.foo)`, `not ((foo != None))`},
+		{"not has", `!has(self.foo)`, `not ((foo not in [None, Undefined]))`},
 		{"precedence", `self.a || self.b && self.c`, `(a or (b and c))`},
 		{"paren group", `(self.a || self.b) && self.c`, `((a or b) and c)`},
 
@@ -56,11 +56,12 @@ func TestCelToKCL(t *testing.T) {
 		{"ternary", `self.a ? "x" : "y"`, `__UNSUPPORTED_CEL_CALL_ternary__`},
 
 		{"size", "size(self.list)", "len(list)"},
+		{"receiver size", "self.list.size()", "len(list)"},
 		{"size self", "size(self)", "__UNSUPPORTED_CEL_CALL_size(self)__"},
 		{"matches", `self.email.matches("^.+@.+$")`, `_regex_match(str(email), "^.+@.+$")`},
 		{"startsWith", `self.name.startsWith("foo")`, `str(name).starts_with("foo")`},
 		{"endsWith", `self.name.endsWith("bar")`, `str(name).ends_with("bar")`},
-		{"has", "has(self.foo)", "(foo != None)"},
+		{"has", "has(self.foo)", "(foo not in [None, Undefined])"},
 
 		{"all", `self.list.all(x, x > 0)`, "all x in list {\n    (x > 0)\n}"},
 		{"exists", `self.list.exists(x, x == "ok")`, "any x in list {\n    (x == \"ok\")\n}"},
@@ -121,5 +122,12 @@ func TestCelToKCL_Errors(t *testing.T) {
 				t.Errorf("expected error for %q", c.in)
 			}
 		})
+	}
+}
+
+func TestCelToKCLBound(t *testing.T) {
+	got, err := celToKCLBound(`self == "self"`, "name")
+	if err != nil || got != `(name == "self")` {
+		t.Fatalf("got %q, error %v", got, err)
 	}
 }

@@ -51,6 +51,10 @@ import (
 //	    x.exists_one(v, p)  -> sum([1 for v in x if p]) == 1
 //	ternary cond ? a : b  -> a if cond else b
 func celToKCL(expr string) (string, error) {
+	return celToKCLBound(expr, "")
+}
+
+func celToKCLBound(expr, field string) (string, error) {
 	// Declare `self` so CEL's parser accepts it. The actual type doesn't
 	// matter for code emission: we only need the parser to be happy.
 	env, err := cel.NewEnv(cel.Declarations(decls.NewVar("self", decls.Dyn)))
@@ -68,7 +72,46 @@ func celToKCL(expr string) (string, error) {
 	if parsed.GetExpr() == nil {
 		return "", fmt.Errorf("cel: empty expression")
 	}
+	if field != "" {
+		bindSelf(parsed.GetExpr(), field)
+	}
 	return emitKCL(parsed.GetExpr())
+}
+
+// bindSelf substitutes identifiers in the CEL AST, leaving string literals intact.
+func bindSelf(e *exprpb.Expr, field string) {
+	if e == nil {
+		return
+	}
+	switch k := e.GetExprKind().(type) {
+	case *exprpb.Expr_IdentExpr:
+		if k.IdentExpr.Name == "self" {
+			k.IdentExpr.Name = field
+		}
+	case *exprpb.Expr_SelectExpr:
+		bindSelf(k.SelectExpr.Operand, field)
+	case *exprpb.Expr_CallExpr:
+		bindSelf(k.CallExpr.Target, field)
+		for _, arg := range k.CallExpr.Args {
+			bindSelf(arg, field)
+		}
+	case *exprpb.Expr_ListExpr:
+		for _, item := range k.ListExpr.Elements {
+			bindSelf(item, field)
+		}
+	case *exprpb.Expr_StructExpr:
+		for _, entry := range k.StructExpr.Entries {
+			bindSelf(entry.GetMapKey(), field)
+			bindSelf(entry.Value, field)
+		}
+	case *exprpb.Expr_ComprehensionExpr:
+		c := k.ComprehensionExpr
+		bindSelf(c.IterRange, field)
+		bindSelf(c.AccuInit, field)
+		bindSelf(c.LoopCondition, field)
+		bindSelf(c.LoopStep, field)
+		bindSelf(c.Result, field)
+	}
 }
 
 // emitKCL walks one protobuf CEL Expr and returns its KCL rendering.
@@ -99,7 +142,7 @@ func emitKCL(e *exprpb.Expr) (string, error) {
 // blocks reference schema attributes directly without `self`, so when the
 // operand is the bare identifier `self` we strip the prefix. When the
 // select is a CEL presence test (`has(self.f)`), we translate it to the
-// KCL equivalent `f != None` so the rule stays semantically meaningful
+// KCL equivalent `f not in [None, Undefined]` so the rule stays semantically meaningful
 // inside a schema check. Non-`self` operands are kept verbatim so that
 // constructs we don't know how to translate still produce a placeholder
 // the caller can detect.
@@ -107,7 +150,7 @@ func emitSelect(s *exprpb.Expr_Select) (string, error) {
 	isSelf := isSelfIdent(s.GetOperand())
 	if s.GetTestOnly() {
 		if isSelf {
-			return fmt.Sprintf("(%s != None)", s.GetField()), nil
+			return fmt.Sprintf("(%s not in [None, Undefined])", s.GetField()), nil
 		}
 		// `has(m.f)` for non-`self` operands: KCL has no `has` and we
 		// can't express "attribute of an arbitrary value" safely, so
@@ -247,7 +290,7 @@ func emitCall(c *exprpb.Expr_Call) (string, error) {
 	}
 
 	// `size(x)` is a global function in CEL.
-	if fn == "size" {
+	if fn == "size" && c.GetTarget() == nil {
 		if len(c.GetArgs()) != 1 {
 			return "", fmt.Errorf("cel: size() expects 1 arg, got %d", len(c.GetArgs()))
 		}
@@ -273,6 +316,11 @@ func emitCall(c *exprpb.Expr_Call) (string, error) {
 			return "", err
 		}
 		switch fn {
+		case "size":
+			if len(c.GetArgs()) != 0 {
+				return "", fmt.Errorf("cel: receiver size() expects no args")
+			}
+			return fmt.Sprintf("len(%s)", target), nil
 		case "matches":
 			if len(c.GetArgs()) != 1 {
 				return "", fmt.Errorf("cel: matches() expects 1 arg, got %d", len(c.GetArgs()))

@@ -61,6 +61,7 @@ func initTemplateRepo() {
 func DefaultFuncMap(lang *LanguageOpts) template.FuncMap {
 	return map[string]interface{}{
 		"pascalize": pascalize,
+		"fieldCEL":  celToKCLBound,
 		"camelize":  swag.ToJSONName,
 		"varname":   lang.MangleVarName,
 		"humanize":  swag.ToHumanNameLower,
